@@ -2,17 +2,32 @@
 # coding: utf-8
 
 """
-IIASA ABM Raw Results Analysis
-Code from Nike modified by Benjamin
+IIASA ABM Raw Results Analysis - Legacy Monolithic Script
+
+NOTICE: This is the legacy monolithic script. For new analyses, please use main.py
+which provides a cleaner, modular interface with command-line arguments.
+
+Usage:
+    # For modern approach (recommended):
+    python main.py --scenario-files baseline.mat shock.mat --scenario-names shock_scenario
+
+    # For this legacy script:
+    python IIASA_ABM_Raw_Results_Analysis.py
 
 This script analyzes Agent-Based Model (ABM) results from IIASA,
 comparing baseline scenarios with various shock scenarios (floods, earthquakes, droughts).
+
+Code from Nike modified by Benjamin
 """
 
 print('loading libs')
 
 # Standard library
 import os
+import sys
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Third-party libraries
 import numpy as np
@@ -29,146 +44,20 @@ import matplotlib.patches as patches
 import matplotlib.patheffects as path_effects
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
+# Import from modular structure
+from constants import (
+    country_codes, country_codes_3, sectors_nace_62, sectors_nace_1,
+    time_steps, experiments, dimensionLabels, dimensionLabelsLengths,
+    sectors_nace_1_colors, sectors_nace_62_colors, thingsWeCareAbout,
+    danube_countries, danube_nuts_2, regions, key_sectors
+)
+from data_processing.aggregation import aggregateSectorNace62ToNace1
+from visualization.utils import ensure_dir_exists, save_figure, describe_data as describeData
+
 #%%
 
-# show the plots?
-showPlots = False
-
-#%% Utility functions
-def aggregateSectorNace62ToNace1(inArray):
-    """Aggregate sector data from NACE 62 classification to NACE 1 classification.
-
-    Optimized version using numpy vectorization instead of nested loops.
-    """
-    shape = list(inArray.shape)
-    sectorDim = shape.index(len(sectors_nace_62))
-    shape[sectorDim] = len(sectors_nace_1)
-    aggArray = np.zeros(shape)  # Changed from ones to zeros for proper summation
-
-    # Pre-compute sector mapping to avoid repeated list comprehensions
-    sector_mapping = []
-    for s in sectors_nace_1:
-        matched_idcs = [i for i, sector in enumerate(sectors_nace_62) if sector.startswith(s)]
-        sector_mapping.append(matched_idcs)
-
-    # Aggregate using vectorized operations
-    if len(shape) == 4:  # [time, experiments, countries, sectors]
-        for s_idx, matched_idcs in enumerate(sector_mapping):
-            aggArray[:, :, :, s_idx] = inArray[:, :, :, matched_idcs].sum(axis=3)
-    else:  # [time, countries, sectors]
-        for s_idx, matched_idcs in enumerate(sector_mapping):
-            aggArray[:, :, s_idx] = inArray[:, :, matched_idcs].sum(axis=2)
-
-    return aggArray
-
-def describeData(data):
-    """Describe the structure and dimensions of data arrays."""
-    for key in list(data.keys()):
-        print(key)
-        if(type(data[key]) != np.ndarray):
-            print("   Is not a data array, ignoring.")
-        else:
-            x = data[key]
-            print("   Is an array with shape: " + str(x.shape))
-            dimensions = ''
-            for j in range(0,(len(list(x.shape)))):
-                if key[-5:] == "_mean" and j==1 and x.shape[j]==1:
-                    dimensions = dimensions + "experiment mean" + ', '
-                else:
-                    dimensions = dimensions + list(dimensionLabels.keys())[dimensionLabelsLengths.index(x.shape[j])] + ', '
-            dimensions = dimensions[:-2]
-            print("   dimensions: " + dimensions)
-
-def ensure_dir_exists(directory):
-    """Create directory if it doesn't exist."""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-def save_figure(fig, filepath, dpi=300, formats=['png', 'pdf'], **kwargs):
-    """Save figure in multiple formats."""
-    ensure_dir_exists(os.path.dirname(filepath))
-    base_path = os.path.splitext(filepath)[0]
-    for fmt in formats:
-        fig.savefig(f"{base_path}.{fmt}", dpi=dpi, **kwargs)
-
-def hide_unused_subplots(axes, start_index, nrows, ncols):
-    """Hide unused subplots in a grid."""
-    row = start_index // ncols
-    col = start_index % ncols
-    for index in range(start_index, nrows * ncols):
-        if col == ncols:
-            row += 1
-            col = 0
-        if row < nrows and col < ncols:
-            axes[row, col].axis('off')
-        col += 1
-
-def get_subplot_position(index, ncols):
-    """Get row and column position from index."""
-    return index // ncols, index % ncols
-
-#%% Constants data labels
-# List of country codes
-country_codes = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'HR',
-                 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK']
-country_codes_3 = ['AUT', 'BEL', 'BGR', 'CYP', 'CZE', 'DEU', 'DNK', 'EST', 'GRC', 'ESP', 'FIN', 'FRA', 'HRV',
-                 'HUN', 'IRL', 'ITA', 'LTU', 'LUX', 'LVA', 'NLD', 'POL', 'PRT', 'ROU', 'SWE', 'SVN', 'SVK']
-regions=['AT11', 'AT12', 'AT13', 'AT21', 'AT22', 'AT31', 'AT32', 'AT33', 'AT34', 'BE10', 'BE21', 'BE22', 'BE23',
-         'BE24', 'BE25', 'BE31', 'BE32', 'BE33', 'BE34', 'BE35', 'BG31', 'BG32', 'BG33', 'BG34', 'BG41', 'BG42',
-         'CY00', 'CZ01', 'CZ02', 'CZ03', 'CZ04', 'CZ05', 'CZ06', 'CZ07', 'CZ08', 'DE11', 'DE12', 'DE13', 'DE14',
-         'DE21', 'DE22', 'DE23', 'DE24', 'DE25', 'DE26', 'DE27', 'DE30', 'DE40', 'DE50', 'DE60', 'DE71', 'DE72',
-         'DE73', 'DE80', 'DE91', 'DE92', 'DE93', 'DE94', 'DEA1', 'DEA2', 'DEA3', 'DEA4', 'DEA5', 'DEB1', 'DEB2',
-         'DEB3', 'DEC0', 'DED2', 'DED4', 'DED5', 'DEE0', 'DEF0', 'DEG0', 'DK01', 'DK02', 'DK03', 'DK04', 'DK05',
-         'EE00', 'EL30', 'EL41', 'EL42', 'EL43', 'EL51', 'EL52', 'EL53', 'EL54', 'EL61', 'EL62', 'EL63', 'EL64',
-         'EL65', 'ES11', 'ES12', 'ES13', 'ES21', 'ES22', 'ES23', 'ES24', 'ES30', 'ES41', 'ES42', 'ES43', 'ES51',
-         'ES52', 'ES53', 'ES61', 'ES62', 'ES63', 'ES64', 'ES70', 'FI1B', 'FI1C', 'FI1D', 'FI19', 'FI20', 'FR10',
-         'FRB0', 'FRC1', 'FRC2', 'FRD1', 'FRD2', 'FRE1', 'FRE2', 'FRF1', 'FRF2', 'FRF3', 'FRG0', 'FRH0', 'FRI1',
-         'FRI2', 'FRI3', 'FRJ1', 'FRJ2', 'FRK1', 'FRK2', 'FRL0', 'FRM0', 'FRY1', 'FRY2', 'FRY3', 'FRY4', 'HR03',
-         'HU11', 'HU12', 'HU21', 'HU22', 'HU23', 'HU31', 'HU32', 'HU33', 'IE04', 'IE05', 'IE06', 'ITC1', 'ITC2',
-         'ITC3', 'ITC4', 'ITF1', 'ITF2', 'ITF3', 'ITF4', 'ITF5', 'ITF6', 'ITG1', 'ITG2', 'ITH1', 'ITH2', 'ITH3',
-         'ITH4', 'ITH5', 'ITI1', 'ITI2', 'ITI3', 'ITI4', 'LT01', 'LT02', 'LU00', 'LV00', 'NL11', 'NL12', 'NL13',
-         'NL21', 'NL22', 'NL23', 'NL31', 'NL32', 'NL33', 'NL34', 'NL41', 'NL42', 'PL21', 'PL22', 'PL41', 'PL42',
-         'PL43', 'PL51', 'PL52', 'PL61', 'PL62', 'PL63', 'PL71', 'PL72', 'PL81', 'PL82', 'PL84', 'PL91', 'PL92',
-         'PT11', 'PT15', 'PT16', 'PT17', 'PT18', 'PT20', 'PT30', 'RO11', 'RO12', 'RO21', 'RO22', 'RO31', 'RO32',
-         'RO41', 'RO42', 'SE11', 'SE12', 'SE21', 'SE22', 'SE23', 'SE31', 'SE32', 'SE33', 'SI03', 'SI04', 'SK01',
-         'SK02', 'SK03', 'SK04'];
-danube_countries = ['DE', 'AT', 'CZ', 'HU', 'SK', 'SI', 'RO', 'BG', 'HR']
-# List of NUTS-2 codes for the specified countries and German regions
-danube_nuts_2 = [
-    # Germany
-    'DE11', 'DE13', 'DE14', 'DE21', 'DE22', 'DE23', 'DE24', 'DE25', 'DE26', 'DE27',
-    # Austria
-    'AT11', 'AT12', 'AT13', 'AT21', 'AT22', 'AT31', 'AT32', 'AT33', 'AT34',
-    # Czechia
-    'CZ01', 'CZ02', 'CZ03', 'CZ04', 'CZ05', 'CZ06', 'CZ07', 'CZ08',
-    # Hungary
-    'HU11', 'HU12', 'HU21', 'HU22', 'HU23', 'HU31', 'HU32', 'HU33',
-    # Slovenia
-    'SI03', 'SI04',
-    # Croatia
-    'HR03', #'HR04',
-    # Romania
-    'RO11', 'RO12', 'RO21', 'RO22', 'RO31', 'RO32', 'RO41', 'RO42',
-    # Bulgaria
-    'BG31', 'BG32', 'BG33', 'BG34', 'BG41', 'BG42'
-]
-sectors_nace_62 = ['A01', 'A02', 'A03', 'B', 'C10-C12', 'C13-C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22', 'C23',
-           'C24', 'C25', 'C26', 'C27', 'C28', 'C29', 'C30', 'C31_C32', 'C33', 'D', 'E36', 'E37-E39', 'F', 'G45',
-           'G46', 'G47', 'H49', 'H50', 'H51', 'H52', 'H53', 'I', 'J58', 'J59_J60', 'J61', 'J62_J63', 'K64', 'K65',
-           'K66', 'L', 'M69_M70', 'M71', 'M72', 'M73', 'M74_M75', 'N77', 'N78', 'N79', 'N80-N82', 'O', 'P',
-           'Q86', 'Q87_Q88', 'R90-R92', 'R93', 'S94', 'S95', 'S96']
-sectors_nace_1 = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S']
-key_sectors = ['A01', 'H50', 'H51', 'H52', 'H53', 'K64', 'K65']
-
-time_steps = [f"Quarter {i}" for i in range(0,13)]
-
-experiments = [f"E{i}" for i in range(0,18)]
-
-dimensionLabels = {"countries":country_codes,"sectors_nace_62":sectors_nace_62,"sectors_nace_1":sectors_nace_1,"time":time_steps,"experiments":experiments}
-dimensionLabelsLengths =  [len(dimensionLabels[i]) for i in dimensionLabels.keys()]
-
-sectors_nace_1_colors =  cm.tab20.colors
-sectors_nace_62_colors =  cm.tab20(np.linspace(0, 1, len(sectors_nace_62)))
+# Configuration
+showPlots = False  # Set to True to display plots interactively
 
 #%% load data
 print('loading data')
