@@ -1,169 +1,67 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# code from Nike modified by Benjamin
+"""
+IIASA ABM Raw Results Analysis - Legacy Monolithic Script
 
-#%% In[2]:
+NOTICE: This is the legacy monolithic script. For new analyses, please use main.py
+which provides a cleaner, modular interface with command-line arguments.
+
+Usage:
+    # For modern approach (recommended):
+    python main.py --scenario-files baseline.mat shock.mat --scenario-names shock_scenario
+
+    # For this legacy script:
+    python IIASA_ABM_Raw_Results_Analysis.py
+
+This script analyzes Agent-Based Model (ABM) results from IIASA,
+comparing baseline scenarios with various shock scenarios (floods, earthquakes, droughts).
+
+Code from Nike modified by Benjamin
+"""
 
 print('loading libs')
 
-from scipy.io import loadmat
+# Standard library
+import os
+import sys
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Third-party libraries
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import seaborn as sns
+from scipy.io import loadmat
+
+# Matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.patches as patches
 import matplotlib.patheffects as path_effects
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import os
+
+# Import from modular structure
+from constants import (
+    country_codes, country_codes_3, sectors_nace_62, sectors_nace_1,
+    time_steps, experiments, dimensionLabels, dimensionLabelsLengths,
+    sectors_nace_1_colors, sectors_nace_62_colors, thingsWeCareAbout,
+    danube_countries, danube_nuts_2, regions, key_sectors
+)
+from data_processing.aggregation import aggregateSectorNace62ToNace1
+from visualization.utils import ensure_dir_exists, save_figure, describe_data as describeData
 
 #%%
 
-# show the plots?
-showPlots = False
-
-#%% function to find the shape of a nested list as python is defficient
-def shape(listOfLists):
-    shape = []
-    b = listOfLists
-    while type(b) == list:
-        shape.append(len(b))
-        b = b[0]
-    return shape
-
-#%% sector aggregation function
-def aggregateSectorNace62ToNace1(inArray):
-    shape = list(inArray.shape)
-    sectorDim = shape.index(len(sectors_nace_62))
-    shape[sectorDim] = len(sectors_nace_1)
-    aggArray = np.ones(shape)
-    for t in range(len(time_steps)):
-        for c in range(len(country_codes)):
-            for s in range(len(sectors_nace_1)):
-                matched_sector_idcs = [sectors_nace_62.index(sector) for sector in sectors_nace_62 if sector.startswith(sectors_nace_1[s])]
-                if len(shape)==4:
-                    for e in range(len(experiments)):
-                        aggArray[t,e,c,s] = sum(inArray[t,e,c,matched_sector_idcs])
-                else:
-                    aggArray[t,c,s] = sum(inArray[t,c,matched_sector_idcs])
-    return aggArray
-
-#%% data description function
-def describeData(data):
-    for key in list(data.keys()):
-        print(key)
-        if(type(data[key]) != np.ndarray):
-            print("   Is not a data array, ignoring.")
-        else:
-            x = data[key]
-            print("   Is an array with shape: " + str(x.shape))
-            dimensions = ''
-            for j in range(0,(len(list(x.shape)))):
-                if key[-5:] == "_mean" and j==1 and x.shape[j]==1:
-                    dimensions = dimensions + "experiment mean" + ', '
-                else:
-                    dimensions = dimensions + list(dimensionLabels.keys())[dimensionLabelsLengths.index(x.shape[j])] + ', '
-            dimensions = dimensions[:-2]
-            print("   dimensions: " + dimensions)
-
-#%% area of circle wedge
-# use if you want the change in the piechart wedge radi to reflect the area change of the wedges
-# decided against this as with linear radius scaling, we can add concentric circles behind the pie for scales
-
-# def areaOfWedges(pieData, radius):
-#     angles = 360 * pieData / sum(pieData)
-#     areas = np.pi * radius**2 * angles/360
-#     return areas, angles
-
-# def radiusOfWedgeWithArea(area,angle):
-#     return np.sqrt((area*360)/(np.pi * angle))
-
-# def radiusOfRelChange(pieData, baseAreas, baseRadius, angles):
-#     relChangedAreas = baseAreas * pieData
-#     return radiusOfWedgeWithArea(relChangedAreas, angles)
-
-
-# baseAreas, baseAngles = areaOfWedges(piedata,base_radius)
-# relAdjArea = baseAreas[s] * (1+ scenarios_dif_rel[scenario_index][sector_thing][time_index,country_index,s]*10)
-# relAdjRadius = np.sqrt((relAdjArea*360)/(np.pi * baseAngles[s]))
-
-#%% Constants data labels
-# List of country codes
-country_codes = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'HR',
-                 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK']
-country_codes_3 = ['AUT', 'BEL', 'BGR', 'CYP', 'CZE', 'DEU', 'DNK', 'EST', 'GRC', 'ESP', 'FIN', 'FRA', 'HRV',
-                 'HUN', 'IRL', 'ITA', 'LTU', 'LUX', 'LVA', 'NLD', 'POL', 'PRT', 'ROU', 'SWE', 'SVN', 'SVK']
-regions=['AT11', 'AT12', 'AT13', 'AT21', 'AT22', 'AT31', 'AT32', 'AT33', 'AT34', 'BE10', 'BE21', 'BE22', 'BE23',
-         'BE24', 'BE25', 'BE31', 'BE32', 'BE33', 'BE34', 'BE35', 'BG31', 'BG32', 'BG33', 'BG34', 'BG41', 'BG42',
-         'CY00', 'CZ01', 'CZ02', 'CZ03', 'CZ04', 'CZ05', 'CZ06', 'CZ07', 'CZ08', 'DE11', 'DE12', 'DE13', 'DE14',
-         'DE21', 'DE22', 'DE23', 'DE24', 'DE25', 'DE26', 'DE27', 'DE30', 'DE40', 'DE50', 'DE60', 'DE71', 'DE72',
-         'DE73', 'DE80', 'DE91', 'DE92', 'DE93', 'DE94', 'DEA1', 'DEA2', 'DEA3', 'DEA4', 'DEA5', 'DEB1', 'DEB2',
-         'DEB3', 'DEC0', 'DED2', 'DED4', 'DED5', 'DEE0', 'DEF0', 'DEG0', 'DK01', 'DK02', 'DK03', 'DK04', 'DK05',
-         'EE00', 'EL30', 'EL41', 'EL42', 'EL43', 'EL51', 'EL52', 'EL53', 'EL54', 'EL61', 'EL62', 'EL63', 'EL64',
-         'EL65', 'ES11', 'ES12', 'ES13', 'ES21', 'ES22', 'ES23', 'ES24', 'ES30', 'ES41', 'ES42', 'ES43', 'ES51',
-         'ES52', 'ES53', 'ES61', 'ES62', 'ES63', 'ES64', 'ES70', 'FI1B', 'FI1C', 'FI1D', 'FI19', 'FI20', 'FR10',
-         'FRB0', 'FRC1', 'FRC2', 'FRD1', 'FRD2', 'FRE1', 'FRE2', 'FRF1', 'FRF2', 'FRF3', 'FRG0', 'FRH0', 'FRI1',
-         'FRI2', 'FRI3', 'FRJ1', 'FRJ2', 'FRK1', 'FRK2', 'FRL0', 'FRM0', 'FRY1', 'FRY2', 'FRY3', 'FRY4', 'HR03',
-         'HU11', 'HU12', 'HU21', 'HU22', 'HU23', 'HU31', 'HU32', 'HU33', 'IE04', 'IE05', 'IE06', 'ITC1', 'ITC2',
-         'ITC3', 'ITC4', 'ITF1', 'ITF2', 'ITF3', 'ITF4', 'ITF5', 'ITF6', 'ITG1', 'ITG2', 'ITH1', 'ITH2', 'ITH3',
-         'ITH4', 'ITH5', 'ITI1', 'ITI2', 'ITI3', 'ITI4', 'LT01', 'LT02', 'LU00', 'LV00', 'NL11', 'NL12', 'NL13',
-         'NL21', 'NL22', 'NL23', 'NL31', 'NL32', 'NL33', 'NL34', 'NL41', 'NL42', 'PL21', 'PL22', 'PL41', 'PL42',
-         'PL43', 'PL51', 'PL52', 'PL61', 'PL62', 'PL63', 'PL71', 'PL72', 'PL81', 'PL82', 'PL84', 'PL91', 'PL92',
-         'PT11', 'PT15', 'PT16', 'PT17', 'PT18', 'PT20', 'PT30', 'RO11', 'RO12', 'RO21', 'RO22', 'RO31', 'RO32',
-         'RO41', 'RO42', 'SE11', 'SE12', 'SE21', 'SE22', 'SE23', 'SE31', 'SE32', 'SE33', 'SI03', 'SI04', 'SK01',
-         'SK02', 'SK03', 'SK04'];
-danube_countries = ['DE', 'AT', 'CZ', 'HU', 'SK', 'SI', 'RO', 'BG', 'HR']
-# List of NUTS-2 codes for the specified countries and German regions
-danube_nuts_2 = [
-    # Germany
-    'DE11', 'DE13', 'DE14', 'DE21', 'DE22', 'DE23', 'DE24', 'DE25', 'DE26', 'DE27',
-    # Austria
-    'AT11', 'AT12', 'AT13', 'AT21', 'AT22', 'AT31', 'AT32', 'AT33', 'AT34',
-    # Czechia
-    'CZ01', 'CZ02', 'CZ03', 'CZ04', 'CZ05', 'CZ06', 'CZ07', 'CZ08',
-    # Hungary
-    'HU11', 'HU12', 'HU21', 'HU22', 'HU23', 'HU31', 'HU32', 'HU33',
-    # Slovenia
-    'SI03', 'SI04',
-    # Croatia
-    'HR03', #'HR04',
-    # Romania
-    'RO11', 'RO12', 'RO21', 'RO22', 'RO31', 'RO32', 'RO41', 'RO42',
-    # Bulgaria
-    'BG31', 'BG32', 'BG33', 'BG34', 'BG41', 'BG42'
-]
-sectors_nace_62 = ['A01', 'A02', 'A03', 'B', 'C10-C12', 'C13-C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22', 'C23',
-           'C24', 'C25', 'C26', 'C27', 'C28', 'C29', 'C30', 'C31_C32', 'C33', 'D', 'E36', 'E37-E39', 'F', 'G45',
-           'G46', 'G47', 'H49', 'H50', 'H51', 'H52', 'H53', 'I', 'J58', 'J59_J60', 'J61', 'J62_J63', 'K64', 'K65',
-           'K66', 'L', 'M69_M70', 'M71', 'M72', 'M73', 'M74_M75', 'N77', 'N78', 'N79', 'N80-N82', 'O', 'P',
-           'Q86', 'Q87_Q88', 'R90-R92', 'R93', 'S94', 'S95', 'S96']
-sectors_nace_1 = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S']
-key_sectors = ['A01', 'H50', 'H51', 'H52', 'H53', 'K64', 'K65']
-
-time_steps = [f"Quarter {i}" for i in range(0,13)]
-
-experiments = [f"E{i}" for i in range(0,18)]
-
-dimensionLabels = {"countries":country_codes,"sectors_nace_62":sectors_nace_62,"sectors_nace_1":sectors_nace_1,"time":time_steps,"experiments":experiments}
-dimensionLabelsLengths =  [len(dimensionLabels[i]) for i in dimensionLabels.keys()]
-
-sectors_nace_1_colors =  cm.tab20.colors
-sectors_nace_62_colors =  cm.tab20(np.linspace(0, 1, len(sectors_nace_62)))
+# Configuration
+showPlots = False  # Set to True to display plots interactively
 
 #%% load data
 print('loading data')
 # `data` is a dictionary with variable names as keys and loaded matrices as values
-
-# initial result set
-# base = loadmat('data/IIASA_ABM/Baseline.mat')
-# shock_eq = loadmat('data/IIASA_ABM/Earthquake_Q1.mat')
-# shock_f = loadmat('data/IIASA_ABM/Flood_Q1.mat')
-# shock_eq_f = loadmat('data/IIASA_ABM/Earthquake_Q1_Flood_Q5.mat')
-# shock_f_eq = loadmat('data/IIASA_ABM/Flood_Q1_Earthquake_Q5.mat')
-
 # result set 06.11.2024
 base = loadmat('data/IIASA_ABM/2024-06-11/No_Shock_1_100_MC_30.mat')
 shock_eq = loadmat('data/IIASA_ABM/2024-06-11/Earthquake_Q1_1_100_MC_30.mat')
@@ -352,11 +250,8 @@ for plotType in plotTypes:
         # Show the plot
         if showPlots: plt.show()
 
-
-        if not os.path.exists(figdir):
-            os.makedirs(figdir)
-        fig.savefig(figdir+'/timeseries_' + thing + '_as_' + plotType + '.png')
-        fig.savefig(figdir+'/timeseries_' + thing + '_as_' + plotType + '.pdf')
+        # Save the figure
+        save_figure(fig, figdir+'/timeseries_' + thing + '_as_' + plotType + '.png')
 
         plt.close()
 
@@ -453,15 +348,10 @@ for scenario_index in scenariosToPlot:
 
             # save just the subplot
             figdir = basefigdir + '/' + scenarios_names[scenario_index]
-            if not os.path.exists(figdir):
-                os.makedirs(figdir)
-            fig.savefig(figdir+'/map-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
+            bbox = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.04, 1.06)
+            save_figure(fig, figdir+'/map-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
                         '_scenario_as_' + plotType + '_time_step_ ' + timestep + '.png',
-                        dpi=300,
-                        bbox_inches=ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.04, 1.06))
-            fig.savefig(figdir+'/map-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
-                        '_scenario_as_' + plotType + '_time_step_ ' + timestep + '.pdf',
-                        bbox_inches=ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.04, 1.06))
+                        bbox_inches=bbox)
 
         # Hide unused subplots
         for index in range(len(time_steps), nrows*ncols):  # Adjust the range if the grid size is changed
@@ -476,12 +366,7 @@ for scenario_index in scenariosToPlot:
         if showPlots: plt.show()
 
         figdir = basefigdir
-        if not os.path.exists(figdir):
-            os.makedirs(figdir)
-        fig.savefig(figdir + '/map-'+ thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType + '.png',
-                                dpi=300)
-        fig.savefig(figdir + '/map-'+ thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType + '.pdf')
-
+        save_figure(fig, figdir + '/map-'+ thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType + '.png')
         plt.close(fig)
 
 #%% pie chart config
@@ -655,14 +540,8 @@ for bakedGoodType in ['brokendonouts']:
                 if showPlots: plt.show()
 
                 # save the plot
-                if not os.path.exists(figdir):
-                    os.makedirs(figdir)
-                fig.savefig(figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType +
-                            ' for country ' + country_codes_3[country_index] + '.png',
-                                        dpi=300)
-                fig.savefig(figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType +
-                            ' for country ' + country_codes_3[country_index] + '.pdf')
-
+                save_figure(fig, figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
+                           '_scenario_as_' + plotType + ' for country ' + country_codes_3[country_index] + '.png')
                 plt.close(fig)
 
 #%% pie charts time slices
@@ -749,14 +628,8 @@ for bakedGoodType in ['brokendonouts']:
                 if showPlots: plt.show()
 
                 # save the plot
-                if not os.path.exists(figdir):
-                    os.makedirs(figdir)
-                fig.savefig(figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType +
-                            ' for time ' +timestep + '.png',
-                                        dpi=300)
-                fig.savefig(figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType +
-                            ' for time ' + timestep + '.pdf')
-
+                save_figure(fig, figdir+'/' + bakedGoodType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
+                           '_scenario_as_' + plotType + ' for time ' + timestep + '.png')
                 plt.close(fig)
 
 
@@ -1042,15 +915,10 @@ for insetType in ['brokendonut']:
                 ax_sub.title.set_text('Sectors')
 
                 # save just the subplot
-                if not os.path.exists(figdir):
-                    os.makedirs(figdir)
-                fig.savefig(figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
-                            '_scenario_as_' + plotType + '_time_step_ ' + timestep + '.png',
-                            dpi=300,
-                            bbox_inches=ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.03, 1.06))
-                fig.savefig(figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
-                            '_scenario_as_' + plotType + '_time_step_ ' + timestep + '.pdf',
-                            bbox_inches=ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.03, 1.06))
+                bbox = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()).expanded(1.03, 1.06)
+                save_figure(fig, figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
+                           '_scenario_as_' + plotType + '_time_step_ ' + timestep + '.png',
+                           bbox_inches=bbox)
 
             # Hide unused subplots
             for time_index in range(len(time_steps), nrows*ncols):  # Adjust the range if the grid size is changed
@@ -1065,150 +933,6 @@ for insetType in ['brokendonut']:
 
             # save just the whole figure
             figdir = basefigdir
-            if not os.path.exists(figdir):
-                os.makedirs(figdir)
-            fig.savefig(figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType + '.png',
-                        dpi=300)
-            fig.savefig(figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] + '_scenario_as_' + plotType + '.pdf')
-
+            save_figure(fig, figdir+'/map-' + plotType +'-'+ sector_thing + '_in_' + scenarios_names[scenario_index] +
+                       '_scenario_as_' + plotType + '.png')
             plt.close(fig)
-
-
-
-#%% test
-# plotType = 'dif_rel'
-#
-# if plotType == 'abs':
-#     thing_df = pd.DataFrame({'time': np.repeat(time_steps, len(country_codes)), 'country': country_codes_3 * len(time_steps),
-#                              thing:base[thing].flatten()})
-# if plotType == 'dif_rel':
-#     thing_df = pd.DataFrame({'time': np.repeat(time_steps, len(country_codes)), 'country': country_codes_3 * len(time_steps),
-#                              thing:scenarios_dif_rel[scenario_index][thing].flatten()})
-#
-#
-# # define colors
-# if plotType == 'abs':
-#     cmap = cmap_abs
-#     min_val, max_val = min(thing_df[thing]), max(thing_df[thing])
-# if plotType == 'dif_rel':
-#     cmap = cmap_rel
-# norm = mcolors.Normalize(vmin=min_val, vmax=max_val)
-# scenario_index = 1
-#
-# fig, axes = plt.subplots(1, 1, figsize=(subfig_size[0], subfig_size[1]))
-# plt.tight_layout()
-# fig.suptitle(thing + ' in ' + scenarios_names[scenario_index] + ' scenario as ' + plotType)
-# row = 1
-# col = 1
-# time_index, timestep = 5, 'Q5'
-# thing_df_1 = thing_df[thing_df['time']==timestep]
-#
-# # determine subfigure
-# ax = axes
-#
-# # create the plot
-# thing_df_1 = thing_df[thing_df['time']==timestep]
-# mergedData = europe.merge(thing_df_1, how='left', left_on='ADM0_A3', right_on='country')
-# mergedData.plot(column=thing, cmap=cmap, norm=norm,vmin=min_val,vmax=max_val,
-#                 edgecolor='black', linewidth=0.2,ax=ax)
-#
-# # custom axis
-# ax.set_xlim(-10, 35)
-# ax.set_ylim(32, 67)
-# ax.axis('off')
-#
-#
-#
-#
-# # arrow for BEL inset
-# ax.add_patch(patches.FancyArrowPatch((europe['LABEL_X'][europe['ADM0_A3']=='BEL'].iloc[0],
-#                                           europe['LABEL_Y'][europe['ADM0_A3']=='BEL'].iloc[0]),
-#                                           (europe['INSET_FIG_X'][europe['ADM0_A3']=='BEL'].iloc[0],
-#                                           europe['INSET_FIG_Y'][europe['ADM0_A3']=='BEL'].iloc[0]-1.9),
-#                                           color='k', linewidth=0.2,connectionstyle="arc3,rad=-.3"))
-#
-# # arrow for LUX inset
-# ax.add_patch(patches.FancyArrowPatch((europe['LABEL_X'][europe['ADM0_A3']=='LUX'].iloc[0],
-#                                           europe['LABEL_Y'][europe['ADM0_A3']=='LUX'].iloc[0]),
-#                                           (europe['INSET_FIG_X'][europe['ADM0_A3']=='LUX'].iloc[0]+1.3,
-#                                           europe['INSET_FIG_Y'][europe['ADM0_A3']=='LUX'].iloc[0]-1.3),
-#                                           color='k', linewidth=0.2,connectionstyle="arc3,rad=-.3"))
-#
-# # arrow for SVN inset
-# ax.add_patch(patches.FancyArrowPatch((europe['LABEL_X'][europe['ADM0_A3']=='SVN'].iloc[0],
-#                                           europe['LABEL_Y'][europe['ADM0_A3']=='SVN'].iloc[0]),
-#                                           (europe['INSET_FIG_X'][europe['ADM0_A3']=='SVN'].iloc[0]+1.9,
-#                                           europe['INSET_FIG_Y'][europe['ADM0_A3']=='SVN'].iloc[0]),
-#                                           color='k', linewidth=0.2,connectionstyle="arc3,rad=-.6"))
-#
-# # arrow for SVK inset
-# ax.add_patch(patches.FancyArrowPatch((europe['LABEL_X'][europe['ADM0_A3']=='SVK'].iloc[0]+2,
-#                                           europe['LABEL_Y'][europe['ADM0_A3']=='SVK'].iloc[0]),
-#                                           (europe['INSET_FIG_X'][europe['ADM0_A3']=='SVK'].iloc[0]-1.3,
-#                                           europe['INSET_FIG_Y'][europe['ADM0_A3']=='SVK'].iloc[0]-1.3),
-#                                           color='k', linewidth=0.2,connectionstyle="arc3,rad=.1"))
-#
-# # country inset plots
-# for country_index in range(len(country_codes)):
-#     print('Making inset ' + country_codes_3[country_index])
-#     ax_sub = inset_axes(ax, width=insetfig_size, height=insetfig_size, loc=10,
-#                         bbox_to_anchor=(europe[europe['ADM0_A3']==country_codes_3[country_index]]['INSET_FIG_X'],
-#                                         europe[europe['ADM0_A3']==country_codes_3[country_index]]['INSET_FIG_Y']),
-#                         bbox_transform=ax.transData)
-#     text = ax_sub.text(0.3,0,country_codes[country_index],color='gray',ha='center',va='center',weight='bold')
-#     text.set_path_effects([path_effects.Stroke(linewidth=3, foreground='white'),
-#                        path_effects.Normal()])
-#     piedata = base[sector_thing][time_index,country_index,:]
-#     addRelChangeStackedBarPlot(piedata,scenarios_dif_rel[scenario_index][sector_thing][time_index,country_index,:],ax_sub)
-#     # addBrokenDonutPlot(piedata,ax_sub,halo=True)
-#     # addRelChangePiePlot(piedata,ax_sub)
-#     # limits = 1+(0.09*rel_change_scaling)
-#     # ax_sub.set_xlim(-limits, limits)
-#     # ax_sub.set_ylim(-limits, limits)
-#     # ax_sub.axis('off')
-#     # circle = plt.Circle((0,0), base_radius*(1+0.05*rel_change_scaling), linestyle=':',
-#     #                             fill = False, edgecolor='gray', linewidth=1)
-#     # ax_sub.add_patch(circle)
-#     # shadowArgs = dict(alpha=0.3,antialiased = True, color='white',linewidth=10,linestyle='-')
-#     # ax_sub.add_patch(patches.Shadow(circle,0,0,shade=1,**shadowArgs))
-#
-# # color legend
-# ax_lgd = inset_axes(ax,width=subfig_size[0]*0.04,height=subfig_size[1]*0.4,loc='right')
-# sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-# plt.colorbar(sm,cax=ax_lgd,location='right',shrink=0.01)
-#
-# # title
-# ax.title.set_text(timestep)
-#
-# # scale lines legend
-# ax_sub = inset_axes(ax, width=insetfig_size, height=insetfig_size, loc=10,
-#                     bbox_to_anchor=(ax.get_xlim()[0]+3,ax.get_ylim()[1]-5),
-#                     bbox_transform=ax.transData)
-# ax_sub.title.set_text('Relative Change')
-# limits = base_radius*(1+.09*rel_change_scaling)
-# ax_sub.set_xlim(-limits, limits)
-# ax_sub.set_ylim(-limits, limits)
-# ax_sub.axis('off')
-# sclLin_sty = ['--',':','-',':']
-# sclLin_wth = [1,1,1,1]
-# sclLin_rad = [-0.1,-0.05,0,0.05]
-# sclLin_col = ['gray','gray','k','gray']
-# sclLin_lab = ['-10%','-5%','','+5%']
-# shdCirc_rad = 0
-# shdCirc_lwd = [3,6,8,10,12,14,16,20,22,24,26,28,30]
-# textkw = dict(facecolor='white',linewidth=0,pad=1)
-# for i in range(len(sclLin_rad)):
-#     circle = plt.Circle((0,0), base_radius*(1+sclLin_rad[i]*rel_change_scaling), linestyle=sclLin_sty[i],
-#                         fill = False, edgecolor=sclLin_col[i], linewidth=sclLin_wth[i])
-#     ax_sub.add_patch(circle)
-#     txt=ax_sub.text(0,base_radius*(1+sclLin_rad[i]*rel_change_scaling),sclLin_lab[i],fontsize=10,
-#               backgroundcolor='white',color=sclLin_col[i],horizontalalignment='center',verticalalignment='center')
-#     txt.set_bbox(textkw)
-#
-# # sector color legends
-# ax_sub = inset_axes(ax, width=insetfig_size, height=insetfig_size, loc=10,
-#                     bbox_to_anchor=(ax.get_xlim()[0]+10,ax.get_ylim()[1]-5),
-#                     bbox_transform=ax.transData)
-# wedges, texts = ax_sub.pie(np.ones(len(piedata)), colors=sector_colors, labels=sector_names,
-#                           wedgeprops=wedgeprops, counterclock=False, startangle=-270)
-# ax_sub.title.set_text('Sectors')
